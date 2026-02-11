@@ -39,7 +39,7 @@ The goal was to support coaching decisions using data-driven player segmentation
 ## Key Insights
 - Efficiency metrics revealed high-upside players with limited snap counts.
 - Archetype grouping exposed undervalued statistical profiles.
-- Data-driven segmentation supported targeted recruiting strategy.
+- Data-driven segmentation supported targeted 17 players eligible for secondary team recruitment.
 
 ---
 
