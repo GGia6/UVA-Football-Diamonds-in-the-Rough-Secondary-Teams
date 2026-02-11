@@ -1,0 +1,281 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Dataset loading
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+sportdata<- read.csv("defense_coverage_summary.csv")
+head(sportdata)
+
+data_safeties <- sportdata %>% filter(position == "S")
+data_cornerbacks <- sportdata %>% filter(position == "CB")
+
+head(data_cornerbacks)
+head(data_safeties)
+
+```
+
+## Metrics
+```{r}
+data_cornerbacks <- data_cornerbacks |>
+  mutate(
+    coverage_efficiency = 1 - catch_rate,
+
+    explosiveness_index = yards_per_reception + yards_after_catch,
+
+    ball_hawk_rate = (interceptions + pass_break_ups + forced_incompletes) / targets,
+
+    target_rate = 1 / coverage_snaps_per_target,
+
+    tackle_efficiency = tackles / (tackles + missed_tackles)
+  )
+
+head(data_cornerbacks)
+
+data_safeties <- data_safeties |>
+  mutate(
+    coverage_efficiency = 1 / qb_rating_against,
+    
+    run_support = (tackles * grades_run_defense) / (1 + missed_tackle_rate),
+    
+    explosiveness_index = yards / targets,
+
+    ball_hawk_rate = (interceptions + pass_break_ups) / targets,
+
+    target_rate = 1 / coverage_snaps_per_target,
+
+    tackle_efficiency = tackles / (tackles + missed_tackles)
+  )
+
+head(data_safeties)
+
+```
+## Archetype creation
+```{r}
+##Lockdown CB high coverage_efficiency, low explosiveness_index, low target_rate
+
+##Ball-Hawk CB: high ball_hawk_rate, high interceptions + pass_break_ups, high forced_incomplete_rate
+
+##Box Safety: high tackles, low avg_depth_of_target (closer to LOS), high grades_run_defense
+
+##Hybrid Safety: balanced scores, strong coverage + strong run support
+
+data_cornerbacks<- data_cornerbacks%>%
+  mutate(
+    archetype = case_when(
+      # LOCKDOWN CB
+      coverage_efficiency > quantile(coverage_efficiency, 0.66, na.rm = TRUE) &
+        target_rate < quantile(target_rate, 0.33, na.rm = TRUE) &
+        explosiveness_index < quantile(explosiveness_index, 0.33, na.rm = TRUE) ~ "Lockdown CB",
+
+      # BALL-HAWK CB
+      ball_hawk_rate > quantile(ball_hawk_rate, 0.66, na.rm = TRUE) &
+        forced_incompletion_rate > quantile(forced_incompletion_rate, 0.66, na.rm = TRUE) ~ "Ball-Hawk CB",
+      # Everything else
+      TRUE ~ "Other CB"
+    )
+  )
+
+data_safeties<- data_safeties %>%
+  mutate(
+    archetype = case_when(
+      # BOX SAFETY
+      run_support > quantile(run_support, 0.66, na.rm = TRUE) &
+        avg_depth_of_target < quantile(avg_depth_of_target, 0.33, na.rm = TRUE) &
+        grades_run_defense > quantile(grades_run_defense, 0.66, na.rm = TRUE) ~ "Box Safety",
+
+      # HYBRID SAFETY (balanced)
+      coverage_efficiency > quantile(coverage_efficiency, 0.33, na.rm = TRUE) &
+        coverage_efficiency < quantile(coverage_efficiency, 0.66, na.rm = TRUE) &
+        run_support > quantile(run_support, 0.33, na.rm = TRUE) &
+        run_support < quantile(run_support, 0.66, na.rm = TRUE) ~ "Hybrid Safety",
+
+      # EVERYTHING ELSE
+      TRUE ~ "Other Safety"
+    )
+  )
+
+```
+## Filter archetypes of interest 
+```{r}
+archetype_lockdown<- data_cornerbacks %>%
+  filter(archetype == "Lockdown CB")
+archetype_ballhawk<- data_cornerbacks %>%
+  filter(archetype== "Ball-Hawk CB")
+archetype_box<- data_safeties %>%
+  filter(archetype == "Box Safety")
+archetype_hybrid<- data_safeties %>%
+  filter(archetype== "Hybrid Safety")
+
+archetype_ballhawk
+archetype_box
+archetype_hybrid
+archetype_lockdown
+
+```
+
+## Top players per archetype 
+```{r}
+box_diamonds <- archetype_box %>%
+ mutate(
+    run_rank = rank(desc(run_support)),
+    tackle_rank = rank(desc(tackle_efficiency)),
+    depth_rank = rank(avg_depth_of_target)  # lower = better
+  ) %>%
+  mutate(total_score = run_rank + tackle_rank + depth_rank) %>%
+  arrange(total_score) %>%
+  slice(1:10)
+box_diamonds
+```
+
+```{r}
+plotbox<-ggplot(archetype_box, aes(x = player_game_count, y = tackle_efficiency)) +
+  geom_point() +
+  geom_hline(yintercept = mean(archetype_box$tackle_efficiency, na.rm = TRUE), 
+             linetype = "dashed") +
+  geom_vline(xintercept = mean(archetype_box$player_game_count, na.rm = TRUE)) +
+  labs(
+    title = "Box Safety Diamonds in the Rough",
+    x = "Games Played",
+    y = "Tackle Score"
+  )
+
+plotbox
+
+box_diamonds <- box_diamonds%>%
+  rename(
+    Depth = avg_depth_of_target,
+    Coverage = coverage_efficiency,
+    Explosive = explosiveness_index,
+    Run_Defense = grades_run_defense,
+    Run_Support = run_support
+  )
+
+
+metrics <- c("Depth", "Coverage", 
+             "tackle_efficiency", "Run_Defense", 
+             "Run_Support")
+
+# Reshape for facet plotting
+box_long <- box_diamonds %>%
+  select(player, all_of(metrics)) %>%
+  pivot_longer(cols = metrics, names_to = "metric", values_to = "value")
+
+# Plot: facets = one panel per player
+ggplot(box_long, aes(x = metric, y = value, fill = metric)) +
+  geom_col() +
+  facet_wrap(~ player, scales = "fixed") +
+  coord_cartesian(ylim = c(0, 300)) + 
+  labs(
+    title = "Box Safety Diamond Comparison",
+    x = "Metric",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1),
+        legend.position = "none")
+box_long
+
+boxhum<-ggplot(box_long, aes(x = metric, y = value, color = player, group = player)) +
+  geom_point(size = 3) +
+  geom_line() +
+  labs(
+    title = "Box Safety Diamonds – Metric Comparison",
+    x = "Metric",
+    y = "Value",
+    color = "Player"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+
+boxhum
+
+box_diamonds %>%
+  arrange(depth_rank) %>%
+  mutate(player = factor(player, levels = rev(player))) %>%
+  ggplot(aes(x = depth_rank, y = player)) +
+  geom_col(fill = "#1f77b4") +
+  labs(
+    title = "Box Safety Diamonds by Depth Rank",
+    x = "Depth Rank (Lower = Better)",
+    y = "Player"
+  ) +
+  theme_minimal(base_size = 14)
+
+box_diamonds %>%
+  arrange(tackle_rank) %>%
+  mutate(player = factor(player, levels = rev(player))) %>%
+  ggplot(aes(x = tackle_rank, y = player)) +
+  geom_col(fill = "#1f77b4") +
+  labs(
+    title = "Box Safety Diamonds by Tackle Rank",
+    x = "Tackle Rank (Lower = Better)",
+    y = "Player"
+  ) +
+  theme_minimal(base_size = 14)
+
+box_diamonds %>%
+  arrange(run_rank) %>%
+  mutate(player = factor(player, levels = rev(player))) %>%
+  ggplot(aes(x = run_rank, y = player)) +
+  geom_col(fill = "#1f77b4") +
+  labs(
+    title = "Box Safety Diamonds by Run Rank",
+    x = "Run Rank (Lower = Better)",
+    y = "Player"
+  ) +
+  theme_minimal(base_size = 14)
+
+diamond_ranks <- box_diamonds %>%
+  mutate(overall_score = rowMeans(across(all_of(metrics)), na.rm = TRUE)) %>%
+  arrange(overall_score)
+
+top_overall_diamonds <- diamond_ranks %>%
+  slice_min(order_by = overall_score, n = 5)
+
+
+```
+
+```{r}
+box_diamonds$group <- "Diamond"
+archetype_box$group <- "All Box Safeties"
+
+archetype_box$run_rank <- NA
+archetype_box$tackle_rank <- NA
+archetype_box$depth_rank <- NA
+
+combined_box <- bind_rows(archetype_box, box_diamonds)
+
+box_ranks_long <- combined_box %>%
+  select(player, group, run_rank, tackle_rank, depth_rank) %>%
+  pivot_longer(
+    cols = c(run_rank, tackle_rank, depth_rank),
+    names_to = "Metric",
+    values_to = "Rank"
+  )
+
+ggplot(box_ranks_long, aes(x = Metric, y = Rank, fill = group)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(aes(color = group), width = 0.15, size = 2) +
+  scale_y_reverse() +  # Better rank is lower
+  labs(
+    title = "Box Safety Diamonds vs All Box Safeties",
+    x = "Metric",
+    y = "Rank (Lower is Better)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+
+```
+
